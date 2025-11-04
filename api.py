@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import logging
 import re
-import socket
 from contextlib import asynccontextmanager
 from datetime import datetime
 
