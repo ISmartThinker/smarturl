@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 import motor.motor_asyncio
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, field_validator, HttpUrl
 from urllib.parse import urlparse
@@ -21,15 +21,7 @@ client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
 db = client.url_shortener
 collection = db.urls
 
-def get_local_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
+BASE_URL = "https://smarturl-murex.vercel.app"
 
 def hash_to_shortcode(url):
     return hashlib.md5(url.encode()).hexdigest()[:6].upper()
@@ -71,28 +63,24 @@ async def cleanup_old_urls():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(cleanup_old_urls())
-    actual_ip = get_local_ip()
-    base_url = f"https://smarturl-murex.vercel.app"
     logger.info("SmartURLShortner Successfully Started!")
-    logger.info(f"Api Base URL {base_url}")
-    logger.info(f"And Other Urls {base_url}/api/short, {base_url}/api/chk, {base_url}/api/del, {base_url}/<code>")
+    logger.info(f"Api Base URL {BASE_URL}")
+    logger.info(f"And Other Urls {BASE_URL}/api/short, {BASE_URL}/api/chk, {BASE_URL}/api/del, {BASE_URL}/<code>")
     yield
     task.cancel()
 
 app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
-async def home():
-    actual_ip = get_local_ip()
-    base_url = f"https://smarturl-murex.vercel.app"
+async def home(request: Request):
     return {
         "message": "SmartURLShortner API",
-        "api_base": base_url,
+        "api_base": BASE_URL,
         "endpoints": {
-            "shorten": f"{base_url}/api/short?url=https://example.com&slug=custom",
-            "check": f"{base_url}/api/chk?url={base_url}/ABC123",
-            "delete": f"{base_url}/api/del?url={base_url}/ABC123",
-            "redirect": f"{base_url}/ABC123"
+            "shorten": f"{BASE_URL}/api/short?url=https://example.com&slug=custom",
+            "check": f"{BASE_URL}/api/chk?url={BASE_URL}/ABC123",
+            "delete": f"{BASE_URL}/api/del?url={BASE_URL}/ABC123",
+            "redirect": f"{BASE_URL}/ABC123"
         },
         "api_dev": "@ISmartCoder",
         "api_updates": "@abirxdhackz"
@@ -124,7 +112,7 @@ async def short_url(url: HttpUrl, slug: str = None):
             "last_clicked": None
         })
 
-    short_url = f"https://smarturl-murex.vercel.app/{short_code}"
+    short_url = f"{BASE_URL}/{short_code}"
     return {
         "short_url": short_url,
         "original_url": long_url,
