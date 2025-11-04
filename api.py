@@ -17,14 +17,42 @@ logger = logging.getLogger("api")
 
 MONGO_URI = "mongodb+srv://hakilaakaima:Forhadgandu82@cluster0.q69yjvj.mongodb.net/?retryWrites=true&w=majority&appName=TheSmartToolBot"
 
-client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
-db = client.url_shortener
-collection = db.urls
+_client = None
+_db = None
+_collection = None
+
+def get_database():
+    global _client, _db, _collection
+    
+    try:
+        if _client is not None:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                logger.info("Event loop closed, recreating client")
+                _client = None
+    except RuntimeError:
+        logger.info("No event loop, recreating client")
+        _client = None
+    
+    if _client is None:
+        logger.info("Creating new MongoDB client")
+        _client = motor.motor_asyncio.AsyncIOMotorClient(
+            MONGO_URI,
+            maxPoolSize=1,
+            minPoolSize=0,
+            maxIdleTimeMS=45000,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+            socketTimeoutMS=5000
+        )
+        _db = _client.url_shortener
+        _collection = _db.urls
+    
+    return _collection
 
 BASE_URL = "https://smarturl-murex.vercel.app"
 
-# Enable debug mode for detailed errors
-DEBUG_MODE = True  # Set to False in production to hide detailed errors
+DEBUG_MODE = True
 
 def hash_to_shortcode(url):
     return hashlib.md5(url.encode()).hexdigest()[:6].upper()
@@ -61,6 +89,7 @@ async def cleanup_old_urls():
     while True:
         try:
             await asyncio.sleep(86400)
+            collection = get_database()
             threshold = datetime.utcnow() - timedelta(days=365)
             result = await collection.delete_many({"created_at": {"$lt": threshold}})
             logger.info(f"Cleanup: Deleted {result.deleted_count} old URLs")
@@ -72,6 +101,8 @@ async def cleanup_old_urls():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    get_database()
+    
     task = asyncio.create_task(cleanup_old_urls())
     logger.info("SmartURLShortner Successfully Started!")
     logger.info(f"Api Base URL {BASE_URL}")
@@ -82,6 +113,10 @@ async def lifespan(app: FastAPI):
         await task
     except asyncio.CancelledError:
         pass
+    
+    global _client
+    if _client:
+        _client.close()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -103,7 +138,8 @@ async def home(request: Request):
 @app.get("/api/short")
 async def short_url(url: str, slug: str = None):
     try:
-        # Validate URL format
+        collection = get_database()
+        
         if not url:
             raise HTTPException(status_code=422, detail={
                 "error": "URL parameter is required",
@@ -111,11 +147,9 @@ async def short_url(url: str, slug: str = None):
                 "api_updates": "@abirxdhackz"
             })
         
-        # Add scheme if missing
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
         
-        # Validate URL
         if not is_valid_url(url):
             raise HTTPException(status_code=422, detail={
                 "error": "Invalid URL format",
@@ -181,6 +215,8 @@ async def short_url(url: str, slug: str = None):
 @app.get("/{short_code}")
 async def redirect_short(short_code: str):
     try:
+        collection = get_database()
+        
         logger.info(f"Attempting to redirect short_code: {short_code}")
         
         if not re.fullmatch(r'[A-Za-z0-9_-]+', short_code):
@@ -233,6 +269,8 @@ async def redirect_short(short_code: str):
 @app.get("/api/chk")
 async def check_clicks(url: str = None):
     try:
+        collection = get_database()
+        
         if not url:
             raise HTTPException(status_code=400, detail={
                 "error": "Missing 'url' parameter",
@@ -289,6 +327,8 @@ async def check_clicks(url: str = None):
 @app.get("/api/del")
 async def delete_url(url: str = None):
     try:
+        collection = get_database()
+        
         if not url:
             raise HTTPException(status_code=400, detail={
                 "error": "Missing 'url' parameter",
