@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
@@ -21,6 +22,9 @@ db = client.url_shortener
 collection = db.urls
 
 BASE_URL = "https://smarturl-murex.vercel.app"
+
+# Enable debug mode for detailed errors
+DEBUG_MODE = True  # Set to False in production to hide detailed errors
 
 def hash_to_shortcode(url):
     return hashlib.md5(url.encode()).hexdigest()[:6].upper()
@@ -160,16 +164,25 @@ async def short_url(url: str, slug: str = None):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in short_url: {e}")
-        raise HTTPException(status_code=500, detail={
+        error_detail = {
             "error": "Internal server error",
             "api_dev": "@ISmartCoder",
             "api_updates": "@abirxdhackz"
-        })
+        }
+        if DEBUG_MODE:
+            error_detail.update({
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": traceback.format_exc()
+            })
+        logger.error(f"Error in short_url: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=error_detail)
 
 @app.get("/{short_code}")
 async def redirect_short(short_code: str):
     try:
+        logger.info(f"Attempting to redirect short_code: {short_code}")
+        
         if not re.fullmatch(r'[A-Za-z0-9_-]+', short_code):
             raise HTTPException(status_code=404, detail={
                 "error": "Invalid short code",
@@ -177,29 +190,45 @@ async def redirect_short(short_code: str):
                 "api_updates": "@abirxdhackz"
             })
         
+        logger.info(f"Querying database for short_code: {short_code}")
+        
         result = await collection.find_one_and_update(
             {"short_code": short_code},
             {"$inc": {"clicks": 1}, "$set": {"last_clicked": datetime.utcnow()}},
             return_document=True
         )
         
-        if result:
-            return RedirectResponse(url=result["long_url"], status_code=301)
+        logger.info(f"Database result: {result}")
         
+        if result:
+            long_url = result.get("long_url")
+            logger.info(f"Redirecting to: {long_url}")
+            return RedirectResponse(url=long_url, status_code=301)
+        
+        logger.warning(f"Short code not found: {short_code}")
         raise HTTPException(status_code=404, detail={
             "error": "Short URL not found",
+            "short_code": short_code,
             "api_dev": "@ISmartCoder",
             "api_updates": "@abirxdhackz"
         })
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in redirect_short: {e}")
-        raise HTTPException(status_code=500, detail={
-            "error": "Internal server error",
+        error_detail = {
+            "error": "Internal server error during redirect",
+            "short_code": short_code,
             "api_dev": "@ISmartCoder",
             "api_updates": "@abirxdhackz"
-        })
+        }
+        if DEBUG_MODE:
+            error_detail.update({
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": traceback.format_exc()
+            })
+        logger.error(f"Error in redirect_short for {short_code}: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=error_detail)
 
 @app.get("/api/chk")
 async def check_clicks(url: str = None):
@@ -243,12 +272,19 @@ async def check_clicks(url: str = None):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in check_clicks: {e}")
-        raise HTTPException(status_code=500, detail={
+        error_detail = {
             "error": "Internal server error",
             "api_dev": "@ISmartCoder",
             "api_updates": "@abirxdhackz"
-        })
+        }
+        if DEBUG_MODE:
+            error_detail.update({
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": traceback.format_exc()
+            })
+        logger.error(f"Error in check_clicks: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=error_detail)
 
 @app.get("/api/del")
 async def delete_url(url: str = None):
@@ -287,12 +323,19 @@ async def delete_url(url: str = None):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in delete_url: {e}")
-        raise HTTPException(status_code=500, detail={
+        error_detail = {
             "error": "Internal server error",
             "api_dev": "@ISmartCoder",
             "api_updates": "@abirxdhackz"
-        })
+        }
+        if DEBUG_MODE:
+            error_detail.update({
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": traceback.format_exc()
+            })
+        logger.error(f"Error in delete_url: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=error_detail)
 
 if __name__ == "__main__":
     import uvicorn
