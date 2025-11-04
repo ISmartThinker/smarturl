@@ -5,8 +5,10 @@ import re
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 
-import motor.motor_asyncio
+import pymongo
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, field_validator, HttpUrl
@@ -20,13 +22,14 @@ MONGO_URI = "mongodb+srv://hakilaakaima:Forhadgandu82@cluster0.q69yjvj.mongodb.n
 _client = None
 _db = None
 _collection = None
+executor = ThreadPoolExecutor(max_workers=10)
 
 def get_database():
     global _client, _db, _collection
     
     if _client is None:
         logger.info("Creating new MongoDB client")
-        _client = motor.motor_asyncio.AsyncIOMotorClient(
+        _client = pymongo.MongoClient(
             MONGO_URI,
             maxPoolSize=10,
             minPoolSize=1,
@@ -39,6 +42,13 @@ def get_database():
         _collection = _db.urls
     
     return _collection
+
+def run_in_executor(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
+    return wrapper
 
 BASE_URL = "https://smarturl-murex.vercel.app"
 
@@ -81,7 +91,12 @@ async def cleanup_old_urls():
             await asyncio.sleep(86400)
             collection = get_database()
             threshold = datetime.utcnow() - timedelta(days=365)
-            result = await collection.delete_many({"created_at": {"$lt": threshold}})
+            
+            @run_in_executor
+            def delete_old():
+                return collection.delete_many({"created_at": {"$lt": threshold}})
+            
+            result = await delete_old()
             logger.info(f"Cleanup: Deleted {result.deleted_count} old URLs")
         except asyncio.CancelledError:
             logger.info("Cleanup task cancelled")
@@ -109,10 +124,6 @@ async def lifespan(app: FastAPI):
         _client.close()
 
 app = FastAPI(lifespan=lifespan)
-
-@app.on_event("startup")
-async def startup_event():
-    get_database()
 
 @app.get("/")
 async def home(request: Request):
@@ -164,7 +175,12 @@ async def short_url(url: str, slug: str = None):
         else:
             short_code = hash_to_shortcode(long_url)
         
-        existing = await collection.find_one({"short_code": short_code})
+        @run_in_executor
+        def find_existing():
+            return collection.find_one({"short_code": short_code})
+        
+        existing = await find_existing()
+        
         if existing:
             if slug and existing["long_url"] != long_url:
                 raise HTTPException(status_code=409, detail={
@@ -173,13 +189,17 @@ async def short_url(url: str, slug: str = None):
                     "api_updates": "@abirxdhackz"
                 })
         else:
-            await collection.insert_one({
-                "short_code": short_code,
-                "long_url": long_url,
-                "clicks": 0,
-                "created_at": datetime.utcnow(),
-                "last_clicked": None
-            })
+            @run_in_executor
+            def insert_new():
+                return collection.insert_one({
+                    "short_code": short_code,
+                    "long_url": long_url,
+                    "clicks": 0,
+                    "created_at": datetime.utcnow(),
+                    "last_clicked": None
+                })
+            
+            await insert_new()
         
         short_url_result = f"{BASE_URL}/{short_code}"
         return {
@@ -208,9 +228,9 @@ async def short_url(url: str, slug: str = None):
 
 @app.get("/{short_code}")
 async def redirect_short(short_code: str):
-    collection = get_database()
-    
     try:
+        collection = get_database()
+        
         logger.info(f"Attempting to redirect short_code: {short_code}")
         
         if not re.fullmatch(r'[A-Za-z0-9_-]+', short_code):
@@ -222,11 +242,15 @@ async def redirect_short(short_code: str):
         
         logger.info(f"Querying database for short_code: {short_code}")
         
-        result = await collection.find_one_and_update(
-            {"short_code": short_code},
-            {"$inc": {"clicks": 1}, "$set": {"last_clicked": datetime.utcnow()}},
-            return_document=True
-        )
+        @run_in_executor
+        def find_and_update():
+            return collection.find_one_and_update(
+                {"short_code": short_code},
+                {"$inc": {"clicks": 1}, "$set": {"last_clicked": datetime.utcnow()}},
+                return_document=pymongo.ReturnDocument.AFTER
+            )
+        
+        result = await find_and_update()
         
         logger.info(f"Database result: {result}")
         
@@ -243,18 +267,6 @@ async def redirect_short(short_code: str):
             "api_updates": "@abirxdhackz"
         })
     except HTTPException:
-        raise
-    except RuntimeError as e:
-        if "Event loop is closed" in str(e):
-            global _client
-            _client = None
-            logger.error(f"Event loop closed, resetting client")
-            raise HTTPException(status_code=503, detail={
-                "error": "Service temporarily unavailable, please retry",
-                "short_code": short_code,
-                "api_dev": "@ISmartCoder",
-                "api_updates": "@abirxdhackz"
-            })
         raise
     except Exception as e:
         error_detail = {
@@ -293,7 +305,11 @@ async def check_clicks(url: str = None):
                 "api_updates": "@abirxdhackz"
             })
         
-        doc = await collection.find_one({"short_code": short_code})
+        @run_in_executor
+        def find_doc():
+            return collection.find_one({"short_code": short_code})
+        
+        doc = await find_doc()
         
         if not doc:
             raise HTTPException(status_code=404, detail={
@@ -314,16 +330,6 @@ async def check_clicks(url: str = None):
             "api_updates": "@abirxdhackz"
         }
     except HTTPException:
-        raise
-    except RuntimeError as e:
-        if "Event loop is closed" in str(e):
-            global _client
-            _client = None
-            raise HTTPException(status_code=503, detail={
-                "error": "Service temporarily unavailable, please retry",
-                "api_dev": "@ISmartCoder",
-                "api_updates": "@abirxdhackz"
-            })
         raise
     except Exception as e:
         error_detail = {
@@ -361,7 +367,11 @@ async def delete_url(url: str = None):
                 "api_updates": "@abirxdhackz"
             })
         
-        result = await collection.delete_one({"short_code": short_code})
+        @run_in_executor
+        def delete_one():
+            return collection.delete_one({"short_code": short_code})
+        
+        result = await delete_one()
         
         if result.deleted_count:
             return {
@@ -377,16 +387,6 @@ async def delete_url(url: str = None):
             "api_updates": "@abirxdhackz"
         })
     except HTTPException:
-        raise
-    except RuntimeError as e:
-        if "Event loop is closed" in str(e):
-            global _client
-            _client = None
-            raise HTTPException(status_code=503, detail={
-                "error": "Service temporarily unavailable, please retry",
-                "api_dev": "@ISmartCoder",
-                "api_updates": "@abirxdhackz"
-            })
         raise
     except Exception as e:
         error_detail = {
