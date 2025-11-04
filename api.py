@@ -72,7 +72,7 @@ async def cleanup_old_urls():
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(cleanup_old_urls())
     actual_ip = get_local_ip()
-    base_url = f"http://{actual_ip}:4000"
+    base_url = f"https://smarturl-murex.vercel.app"
     logger.info("SmartURLShortner Successfully Started!")
     logger.info(f"Api Base URL {base_url}")
     logger.info(f"And Other Urls {base_url}/api/short, {base_url}/api/chk, {base_url}/api/del, {base_url}/<code>")
@@ -84,7 +84,7 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/")
 async def home():
     actual_ip = get_local_ip()
-    base_url = f"http://{actual_ip}:4000"
+    base_url = f"https://smarturl-murex.vercel.app"
     return {
         "message": "SmartURLShortner API",
         "api_base": base_url,
