@@ -124,7 +124,7 @@ async def short_url(url: HttpUrl, slug: str = None):
             "last_clicked": None
         })
 
-    short_url = f"http://{get_local_ip()}:4000/{short_code}"
+    short_url = f"https://smarturl-murex.vercel.app/{short_code}"
     return {
         "short_url": short_url,
         "original_url": long_url,
