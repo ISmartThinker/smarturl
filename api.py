@@ -24,26 +24,16 @@ _collection = None
 def get_database():
     global _client, _db, _collection
     
-    try:
-        if _client is not None:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                logger.info("Event loop closed, recreating client")
-                _client = None
-    except RuntimeError:
-        logger.info("No event loop, recreating client")
-        _client = None
-    
     if _client is None:
         logger.info("Creating new MongoDB client")
         _client = motor.motor_asyncio.AsyncIOMotorClient(
             MONGO_URI,
-            maxPoolSize=1,
-            minPoolSize=0,
+            maxPoolSize=10,
+            minPoolSize=1,
             maxIdleTimeMS=45000,
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000,
-            socketTimeoutMS=5000
+            serverSelectionTimeoutMS=10000,
+            connectTimeoutMS=10000,
+            socketTimeoutMS=10000
         )
         _db = _client.url_shortener
         _collection = _db.urls
@@ -119,6 +109,10 @@ async def lifespan(app: FastAPI):
         _client.close()
 
 app = FastAPI(lifespan=lifespan)
+
+@app.on_event("startup")
+async def startup_event():
+    get_database()
 
 @app.get("/")
 async def home(request: Request):
@@ -214,9 +208,9 @@ async def short_url(url: str, slug: str = None):
 
 @app.get("/{short_code}")
 async def redirect_short(short_code: str):
+    collection = get_database()
+    
     try:
-        collection = get_database()
-        
         logger.info(f"Attempting to redirect short_code: {short_code}")
         
         if not re.fullmatch(r'[A-Za-z0-9_-]+', short_code):
@@ -249,6 +243,18 @@ async def redirect_short(short_code: str):
             "api_updates": "@abirxdhackz"
         })
     except HTTPException:
+        raise
+    except RuntimeError as e:
+        if "Event loop is closed" in str(e):
+            global _client
+            _client = None
+            logger.error(f"Event loop closed, resetting client")
+            raise HTTPException(status_code=503, detail={
+                "error": "Service temporarily unavailable, please retry",
+                "short_code": short_code,
+                "api_dev": "@ISmartCoder",
+                "api_updates": "@abirxdhackz"
+            })
         raise
     except Exception as e:
         error_detail = {
@@ -309,6 +315,16 @@ async def check_clicks(url: str = None):
         }
     except HTTPException:
         raise
+    except RuntimeError as e:
+        if "Event loop is closed" in str(e):
+            global _client
+            _client = None
+            raise HTTPException(status_code=503, detail={
+                "error": "Service temporarily unavailable, please retry",
+                "api_dev": "@ISmartCoder",
+                "api_updates": "@abirxdhackz"
+            })
+        raise
     except Exception as e:
         error_detail = {
             "error": "Internal server error",
@@ -361,6 +377,16 @@ async def delete_url(url: str = None):
             "api_updates": "@abirxdhackz"
         })
     except HTTPException:
+        raise
+    except RuntimeError as e:
+        if "Event loop is closed" in str(e):
+            global _client
+            _client = None
+            raise HTTPException(status_code=503, detail={
+                "error": "Service temporarily unavailable, please retry",
+                "api_dev": "@ISmartCoder",
+                "api_updates": "@abirxdhackz"
+            })
         raise
     except Exception as e:
         error_detail = {
